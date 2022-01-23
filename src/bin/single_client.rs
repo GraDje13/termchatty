@@ -38,18 +38,12 @@ fn main() -> Result<(), &'static str> {
         }
     };
 
-    // variable used to keep track of connection status, used so it does not try to disconnect when
-    // other user has already done so
-    let connected = Arc::new(Mutex::new(false));
-    let connected_thread = Arc::clone(&connected);
-
     let listener_thread = thread::spawn(move || {
         loop {
             println!("awaiting remote connection...");
             let (mut socket, address) = match listener.accept() {
                 Ok((sock, addr)) => {
                     println!("Connection with: {:?}", addr);
-                    *connected_thread.lock().unwrap() = true;
                     (sock, addr)
                 }
                 Err(_e) => panic!("Connection failed"),
@@ -64,7 +58,6 @@ fn main() -> Result<(), &'static str> {
                 // see if other user has send disconnect message
                 if start_buffer[0] == EOT {
                     println!("remote disconnected");
-                    *connected_thread.lock().unwrap() = false;
                     break;
                 }
 
@@ -88,9 +81,7 @@ fn main() -> Result<(), &'static str> {
         message_buffer.pop();
 
         if message_buffer == EXIT_COMMAND {
-            if *connected.lock().unwrap() {
-                disconnect(&mut remote_socket);
-            }
+            disconnect(&mut remote_socket);
             break;
         } else {
             message_send(&message_buffer, &mut remote_socket);
@@ -130,5 +121,5 @@ fn connect_until_success(addr: &str) -> TcpStream {
 
 fn disconnect(socket: &mut TcpStream) {
     socket.write_all(&[EOT]).unwrap();
-    socket.shutdown(Shutdown::Both).unwrap();
+    socket.shutdown(Shutdown::Both);
 }
