@@ -1,8 +1,9 @@
+use std::env;
 use std::io::{stdin, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::{env, io};
+use std::time::Duration;
 
 const ARG_NUMBER: usize = 3;
 const SOH: u8 = 1;
@@ -17,30 +18,18 @@ fn main() -> Result<(), &'static str> {
         }
     }
 
-    // collect the command line arguments and pop them into the
-    // relevant variables.
+    // collect the command line arguments
     let mut args: Vec<String> = Vec::with_capacity(ARG_NUMBER);
     args = env::args().collect();
 
-    args.reverse();
-    args.pop();
+    if args.len() != ARG_NUMBER {
+        return Err("wrong number of arguments");
+    }
 
-    let remote_adress = match args.pop() {
-        Some(arg) => arg,
-        None => {
-            return Err("Please enter a remote adress");
-        }
-    };
+    let socket_address = args.remove(2);
+    let remote_adress = args.remove(1);
 
-    let socket_address = match args.pop() {
-        Some(arg) => arg,
-        None => {
-            return Err("Pease enter were you want your socket");
-        }
-    };
-
-    println!("Attempting to create listener on: {}", socket_address);
-
+    // make the listener
     let listener = match TcpListener::bind(socket_address) {
         Ok(list) => list,
         Err(e) => {
@@ -49,6 +38,8 @@ fn main() -> Result<(), &'static str> {
         }
     };
 
+    // variable used to keep track of connection status, used so it does not try to disconnect when
+    // other user has already done so
     let connected = Arc::new(Mutex::new(false));
     let connected_thread = Arc::clone(&connected);
 
@@ -79,38 +70,21 @@ fn main() -> Result<(), &'static str> {
 
                 // if a message is detected, read it and display it
                 if start_buffer[0] == SOH {
-                    let mut length_buffer = [0];
-                    socket.read_exact(&mut length_buffer).unwrap();
-
-                    let mut message_buffer = vec![0; length_buffer[0] as usize];
-                    socket.read_exact(&mut message_buffer).unwrap();
-
-                    println!(
-                        "{}> {}",
-                        address,
-                        String::from_utf8_lossy(message_buffer.as_ref())
-                    );
+                    println!("{}", message_read(&mut socket));
                 }
 
                 //so it does not suck to much cpu
-                thread::sleep(std::time::Duration::from_millis(10));
+                thread::sleep(Duration::from_millis(10));
             }
         }
     });
 
-    let stdin = io::stdin();
-    let mut enter_buffer = String::from("");
-
-    println!("press enter to continue");
-    stdin.read_line(&mut enter_buffer).unwrap();
-
-    let mut remote_socket = TcpStream::connect(remote_adress).unwrap();
+    let mut remote_socket = connect_until_success(&remote_adress);
 
     loop {
         let mut message_buffer = String::from("");
-        print!("you>");
-        std::io::stdout().flush().unwrap();
-        stdin.read_line(&mut message_buffer).unwrap();
+
+        stdin().read_line(&mut message_buffer).unwrap();
         message_buffer.pop();
 
         if message_buffer == EXIT_COMMAND {
@@ -127,11 +101,31 @@ fn main() -> Result<(), &'static str> {
 }
 
 fn message_send(message: &str, socket: &mut TcpStream) {
-    let message_length = message.len() as u8;
-    // TODO: increase character limit from 255 to 2^64
+    let message_length = message.len();
     socket.write_all(&[SOH]).unwrap();
-    socket.write_all(&[message_length]).unwrap();
+    socket.write_all(&message_length.to_le_bytes()).unwrap();
     socket.write_all(message.as_bytes()).unwrap();
+}
+
+fn message_read(socket: &mut TcpStream) -> String {
+    let mut length_buffer = [0; 8];
+    socket.read_exact(&mut length_buffer).unwrap();
+
+    let mut message_buffer = vec![0; usize::from_le_bytes(length_buffer)];
+    socket.read_exact(&mut message_buffer).unwrap();
+
+    String::from_utf8(message_buffer).unwrap()
+}
+
+fn connect_until_success(addr: &str) -> TcpStream {
+    loop {
+        if let Ok(socket) = TcpStream::connect(addr) {
+            return socket;
+        } else {
+            println!("user not online, trying again in a second");
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
 }
 
 fn disconnect(socket: &mut TcpStream) {
